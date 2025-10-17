@@ -18,7 +18,6 @@ except Exception as e:
     print(f"Erreur FATALE lors de l'initialisation de Firebase : {e}")
 
 # --- 2. FONCTIONS DE L'ALGORITHME ---
-# ... (Toutes les fonctions de dijkstra, two_opt, etc. restent inchangées) ...
 def dijkstra(graph, start_node, end_node):
     distances = {node: float('inf') for node in graph}
     distances[start_node] = 0
@@ -96,10 +95,21 @@ def trouver_chemin_initial_glouton(destinations_nodes, graphe):
     return ordered_destinations
 def two_opt_swap(sequence, i, k):
     return sequence[:i] + sequence[i:k+1][::-1] + sequence[k+1:]
+
+# MODIFIÉ : La fonction n'utilise plus le point de sortie 'S' fantôme
 def ameliorer_parcours_two_opt(destinations_only, graphe):
     best_destination_sequence = trouver_chemin_initial_glouton(destinations_only, graphe)
-    full_sequence_for_calc = ['E'] + best_destination_sequence + ['S']
+    
+    # On utilise le dernier produit de la séquence initiale comme point de fin "théorique"
+    # Cela évite d'utiliser 'S' qui n'existe plus
+    if not best_destination_sequence:
+        return ['E']
+        
+    point_de_fin_theorique = best_destination_sequence[-1]
+    
+    full_sequence_for_calc = ['E'] + best_destination_sequence
     best_distance = calculer_distance_totale_destinations(full_sequence_for_calc, graphe)
+    
     improved = True
     iteration_count = 0 
     while improved and iteration_count < 50:
@@ -108,8 +118,9 @@ def ameliorer_parcours_two_opt(destinations_only, graphe):
         for i in range(len(best_destination_sequence)):
             for k in range(i + 1, len(best_destination_sequence)): 
                 candidate_destinations = two_opt_swap(best_destination_sequence, i, k)
-                candidate_full_sequence = ['E'] + candidate_destinations + ['S']
+                candidate_full_sequence = ['E'] + candidate_destinations
                 new_distance = calculer_distance_totale_destinations(candidate_full_sequence, graphe)
+                
                 if new_distance < best_distance:
                     best_distance = new_distance
                     best_destination_sequence = candidate_destinations
@@ -117,6 +128,7 @@ def ameliorer_parcours_two_opt(destinations_only, graphe):
                     break 
             if improved: break
     return ['E'] + best_destination_sequence
+
 def construire_chemin_final_sans_retour(ordered_stops, graphe):
     final_path_nodes = []
     total_distance = 0
@@ -142,7 +154,6 @@ def construire_chemin_final_sans_retour(ordered_stops, graphe):
 
 # --- 3. LOGIQUE DE RÉCUPÉRATION DES DONNÉES ---
 def graphe_to_arêtes(graphe):
-    # ... (inchangé) ...
     aretes = set()
     for start_node, neighbors in graphe.items():
         for end_node, _ in neighbors.items():
@@ -150,7 +161,6 @@ def graphe_to_arêtes(graphe):
                 aretes.add(json.dumps({'start': start_node, 'end': end_node}))
     return [json.loads(a) for a in aretes]
 def get_magasin_data(magasin_id):
-    # ... (inchangé) ...
     try:
         magasin_doc = db.collection('magasins').document(magasin_id).get()
         if not magasin_doc.exists: return None, None, None, None, {"error": "Magasin non trouvé."}
@@ -161,10 +171,9 @@ def get_magasin_data(magasin_id):
         emplacements_produits = {}
         for doc in emplacements_ref:
             data = doc.to_dict()
-            # On stocke maintenant le noeud ET la catégorie
             emplacements_produits[data['nom_produit']] = {
                 'noeud': data.get('noeud_localisation'),
-                'categorie': data.get('categorie', 'sec') # 'sec' par défaut
+                'categorie': data.get('categorie', 'sec')
             }
         aretes_dessin = graphe_to_arêtes(graphe_magasin)
         return graphe_magasin, coordonnees_dessin, emplacements_produits, aretes_dessin, None
@@ -172,11 +181,14 @@ def get_magasin_data(magasin_id):
         return None, None, None, None, {"error": f"Erreur de base de données Firestore: {e}"}
 
 # --- 4. ROUTES API ---
+@app.route('/', methods=['GET'])
+def index_page():
+    return render_template('index2.html')
+
 @app.route('/api/v1/magasin_data/<magasin_id>', methods=['GET'])
 def get_magasin_plan(magasin_id):
     graphe, coordonnees, emplacements, aretes, error = get_magasin_data(magasin_id)
     if error: return jsonify(error), 500
-    # On modifie la structure pour être compatible avec l'ancien frontend
     emplacements_simple = {prod: data['noeud'] for prod, data in emplacements.items()}
     response = { "magasin_id": magasin_id, "coordonnees_dessin": coordonnees, "arêtes_dessin": aretes, "emplacements_produits": emplacements_simple }
     return jsonify(response)
@@ -196,7 +208,6 @@ def optimize_route():
     graphe, _, emplacements_complets, _, error_db = get_magasin_data(magasin_id)
     if error_db: return jsonify(error_db), 500 
 
-    # On sépare les produits normaux des produits surgelés
     destinations_normales = []
     destinations_surgeles = []
     for produit in liste_courses:
@@ -212,19 +223,10 @@ def optimize_route():
     if not destinations_normales and not destinations_surgeles:
         parcours_final_ordonne = ['E', CAISSE_AUTO]
     else:
-        # 1. On optimise le parcours pour les produits normaux
         parcours_produits_normaux = ameliorer_parcours_two_opt(destinations_normales, graphe)
-        
-        # 2. Le point de départ pour les surgelés est le dernier produit normal
         dernier_point_avant_surgeles = parcours_produits_normaux[-1]
-        
-        # 3. On optimise l'ordre des surgelés à partir de ce point
         parcours_surgeles_ordonne = trouver_chemin_initial_glouton(destinations_surgeles, graphe, start_node=dernier_point_avant_surgeles)
-        
-        # 4. On assemble le parcours des produits
         parcours_complet_produits = parcours_produits_normaux + parcours_surgeles_ordonne
-
-        # 5. On choisit la caisse en partant du DERNIER produit (qui sera un surgelé s'il y en a)
         dernier_point_avant_caisse = parcours_complet_produits[-1]
         if nombre_articles <= 5:
             destination_finale = CAISSE_AUTO
@@ -233,7 +235,6 @@ def optimize_route():
             meilleure_caisse = min(CAISSES_REGULIERES, key=lambda c: calculer_distance_entre_noeuds(dernier_point_avant_caisse, c, graphe))
             destination_finale = meilleure_caisse
             message = "Itinéraire via caisse normale (surgelés en dernier)."
-
         parcours_final_ordonne = parcours_complet_produits + [destination_finale]
 
     distance_reelle, parcours_final_noms, error_path = construire_chemin_final_sans_retour(parcours_final_ordonne, graphe)
@@ -241,10 +242,6 @@ def optimize_route():
     response = { "magasin_id": magasin_id, "liste_fournie": liste_courses, "distance_optimale": round(distance_reelle, 2), "parcours_optimise_noms": parcours_final_noms, "message": message }
     return jsonify(response)
 
-# --- ROUTE PRINCIPALE POUR AFFICHER L'APPLICATION ---
-@app.route('/', methods=['GET'])
-def index_page():
-    return render_template('index2.html')
-
+# --- LANCEMENT DE L'APPLICATION ---
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
