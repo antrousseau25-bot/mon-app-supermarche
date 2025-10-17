@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, send_from_directory # render_template est ajouté
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import heapq
 import json
@@ -17,20 +17,8 @@ try:
 except Exception as e:
     print(f"Erreur FATALE lors de l'initialisation de Firebase : {e}")
 
-
-# --- ROUTES POUR SERVIR LES PAGES HTML ---
-
-# La page principale sera accessible à l'adresse http://127.0.0.1:5000/
-@app.route('/', methods=['GET'])
-def index_page():
-    # CORRECTION : On pointe vers le nouveau nom de fichier
-    return render_template('index2.html')
-
-# (La route /admin a été supprimée, c'est parfait)
-
-
-# --- FONCTIONS DE L'ALGORITHME (inchangées) ---
-# ... (Toutes vos fonctions dijkstra, two_opt, etc. restent ici) ...
+# --- 2. FONCTIONS DE L'ALGORITHME ---
+# ... (Toutes les fonctions de dijkstra, two_opt, etc. restent inchangées) ...
 def dijkstra(graph, start_node, end_node):
     distances = {node: float('inf') for node in graph}
     distances[start_node] = 0
@@ -152,8 +140,9 @@ def construire_chemin_final_sans_retour(ordered_stops, graphe):
         total_distance += dist_segment
     return total_distance, final_path_nodes, None
 
-# --- LOGIQUE DE RÉCUPÉRATION DES DONNÉES (inchangé) ---
+# --- 3. LOGIQUE DE RÉCUPÉRATION DES DONNÉES ---
 def graphe_to_arêtes(graphe):
+    # ... (inchangé) ...
     aretes = set()
     for start_node, neighbors in graphe.items():
         for end_node, _ in neighbors.items():
@@ -161,6 +150,7 @@ def graphe_to_arêtes(graphe):
                 aretes.add(json.dumps({'start': start_node, 'end': end_node}))
     return [json.loads(a) for a in aretes]
 def get_magasin_data(magasin_id):
+    # ... (inchangé) ...
     try:
         magasin_doc = db.collection('magasins').document(magasin_id).get()
         if not magasin_doc.exists: return None, None, None, None, {"error": "Magasin non trouvé."}
@@ -171,57 +161,89 @@ def get_magasin_data(magasin_id):
         emplacements_produits = {}
         for doc in emplacements_ref:
             data = doc.to_dict()
-            emplacements_produits[data['nom_produit']] = data['noeud_localisation']
+            # On stocke maintenant le noeud ET la catégorie
+            emplacements_produits[data['nom_produit']] = {
+                'noeud': data.get('noeud_localisation'),
+                'categorie': data.get('categorie', 'sec') # 'sec' par défaut
+            }
         aretes_dessin = graphe_to_arêtes(graphe_magasin)
         return graphe_magasin, coordonnees_dessin, emplacements_produits, aretes_dessin, None
     except Exception as e:
         return None, None, None, None, {"error": f"Erreur de base de données Firestore: {e}"}
 
-# --- ROUTES API (inchangées) ---
+# --- 4. ROUTES API ---
 @app.route('/api/v1/magasin_data/<magasin_id>', methods=['GET'])
 def get_magasin_plan(magasin_id):
     graphe, coordonnees, emplacements, aretes, error = get_magasin_data(magasin_id)
     if error: return jsonify(error), 500
-    response = { "magasin_id": magasin_id, "coordonnees_dessin": coordonnees, "arêtes_dessin": aretes, "emplacements_produits": emplacements }
+    # On modifie la structure pour être compatible avec l'ancien frontend
+    emplacements_simple = {prod: data['noeud'] for prod, data in emplacements.items()}
+    response = { "magasin_id": magasin_id, "coordonnees_dessin": coordonnees, "arêtes_dessin": aretes, "emplacements_produits": emplacements_simple }
     return jsonify(response)
+
 @app.route('/api/v1/optimize_route', methods=['POST'])
 def optimize_route():
     data = request.json
     if not data or 'liste_produits' not in data or 'magasin_id' not in data:
         return jsonify({"error": "Données manquantes"}), 400
+    
     liste_courses = data['liste_produits']
     magasin_id = data['magasin_id']
     nombre_articles = len(liste_courses)
     CAISSES_REGULIERES = ('C1', 'C2', 'C3')
     CAISSE_AUTO = 'CA'
-    graphe, _, emplacements, _, error_db = get_magasin_data(magasin_id)
+
+    graphe, _, emplacements_complets, _, error_db = get_magasin_data(magasin_id)
     if error_db: return jsonify(error_db), 500 
-    destinations_nodes = []
+
+    # On sépare les produits normaux des produits surgelés
+    destinations_normales = []
+    destinations_surgeles = []
     for produit in liste_courses:
-        emplacement = emplacements.get(produit) 
-        if emplacement and emplacement not in destinations_nodes:
-            destinations_nodes.append(emplacement)
-    if not destinations_nodes:
+        data_produit = emplacements_complets.get(produit) 
+        if data_produit and data_produit['noeud']:
+            if data_produit['categorie'] == 'surgelé':
+                if data_produit['noeud'] not in destinations_surgeles:
+                    destinations_surgeles.append(data_produit['noeud'])
+            else:
+                if data_produit['noeud'] not in destinations_normales:
+                    destinations_normales.append(data_produit['noeud'])
+            
+    if not destinations_normales and not destinations_surgeles:
         parcours_final_ordonne = ['E', CAISSE_AUTO]
     else:
-        parcours_produits_ordonne = ameliorer_parcours_two_opt(destinations_nodes, graphe)
-        dernier_point_avant_caisse = parcours_produits_ordonne[-1]
+        # 1. On optimise le parcours pour les produits normaux
+        parcours_produits_normaux = ameliorer_parcours_two_opt(destinations_normales, graphe)
+        
+        # 2. Le point de départ pour les surgelés est le dernier produit normal
+        dernier_point_avant_surgeles = parcours_produits_normaux[-1]
+        
+        # 3. On optimise l'ordre des surgelés à partir de ce point
+        parcours_surgeles_ordonne = trouver_chemin_initial_glouton(destinations_surgeles, graphe, start_node=dernier_point_avant_surgeles)
+        
+        # 4. On assemble le parcours des produits
+        parcours_complet_produits = parcours_produits_normaux + parcours_surgeles_ordonne
+
+        # 5. On choisit la caisse en partant du DERNIER produit (qui sera un surgelé s'il y en a)
+        dernier_point_avant_caisse = parcours_complet_produits[-1]
         if nombre_articles <= 5:
             destination_finale = CAISSE_AUTO
-            message = "Itinéraire via la caisse automatique calculé."
+            message = "Itinéraire via caisse auto (surgelés en dernier)."
         else:
-            meilleure_caisse = min(CAISSES_REGULIERES, key=lambda caisse: calculer_distance_entre_noeuds(dernier_point_avant_caisse, caisse, graphe))
+            meilleure_caisse = min(CAISSES_REGULIERES, key=lambda c: calculer_distance_entre_noeuds(dernier_point_avant_caisse, c, graphe))
             destination_finale = meilleure_caisse
-            message = "Itinéraire via la caisse la plus proche calculé."
-        parcours_final_ordonne = parcours_produits_ordonne + [destination_finale]
+            message = "Itinéraire via caisse normale (surgelés en dernier)."
+
+        parcours_final_ordonne = parcours_complet_produits + [destination_finale]
+
     distance_reelle, parcours_final_noms, error_path = construire_chemin_final_sans_retour(parcours_final_ordonne, graphe)
     if error_path: return jsonify(error_path), 500
     response = { "magasin_id": magasin_id, "liste_fournie": liste_courses, "distance_optimale": round(distance_reelle, 2), "parcours_optimise_noms": parcours_final_noms, "message": message }
     return jsonify(response)
-@app.route('/service-worker.js')
-def serve_sw():
-    return send_from_directory('.', 'service-worker.js')
 
-# --- LANCEMENT DE L'APPLICATION ---
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({"status": "OK", "service": "Route Optimization API"})
+
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
