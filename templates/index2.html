@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Course&Go - Itinéraire Optimisé (V2.7)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        #planCanvas { border: 1px solid #e5e7eb; background-color: #f9fafb; display: block; margin: 0 auto; width: 100%; height: 100%; }
+        .canvas-container { position: relative; width: 100%; padding-top: 100%; max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); }
+        #planCanvas.drawing { position: absolute; top: 0; left: 0; }
+        .search-suggestion { padding: 8px 12px; cursor: pointer; }
+        .search-suggestion:hover { background-color: #f3f4f6; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen font-sans antialiased p-4">
+
+    <div class="max-w-4xl mx-auto p-6 bg-white shadow-xl rounded-lg space-y-6">
+
+        <header class="text-center border-b pb-4">
+            <h1 class="text-3xl font-bold text-indigo-700">🛒 Prototype d'Optimisation du Parcours</h1>
+            <p class="text-gray-600 mt-1">V2.7: Progression par étape</p>
+        </header>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-6">
+                <div class="bg-gray-50 p-4 rounded-lg border">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-800">Ajoutez des produits à votre liste</h2>
+                    <div class="relative">
+                        <input type="text" id="productSearchInput" placeholder="Rechercher un produit..." 
+                               class="w-full p-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500">
+                        <div id="searchResults" class="absolute z-10 w-full bg-white border border-gray-300 rounded-b-lg shadow-lg mt-1 max-h-48 overflow-y-auto" style="display: none;"></div>
+                    </div>
+                    <div id="shoppingListContainer" class="mt-4 space-y-2">
+                        <p class="text-gray-500 text-sm">Votre liste est vide.</p>
+                    </div>
+                    <button onclick="lancerOptimisation()" id="optimizeButton"
+                            class="w-full mt-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md disabled:bg-gray-400 disabled:cursor-not-allowed">
+                        🚀 Lancer l'Optimisation
+                    </button>
+                    <button onclick="validerEtape()" id="nextStepButton"
+                            class="w-full mt-2 bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition duration-150 shadow-md hidden">
+                        Prochain Produit ✔️
+                    </button>
+                </div>
+                
+                <div class="bg-white p-4 rounded-lg shadow-md">
+                    <h2 class="text-xl font-semibold mb-3 text-gray-800">Résultats du Calcul</h2>
+                    <div class="mb-4 text-sm text-gray-700">
+                        <p class="text-gray-500">Statut : <span id="statutCalcul">En attente...</span></p>
+                    </div>
+                    <div class="space-y-2">
+                        <p class="text-sm font-medium text-gray-700">Distance Optimale : <span id="distanceOptimale" class="font-bold text-green-600">N/A</span></p>
+                        <p class="text-xs font-mono text-gray-800 break-all">Itinéraire : <span id="cheminOptimise">N/A</span></p>
+                    </div>
+                </div>
+
+                <div class="p-4 border border-gray-200 rounded-lg text-sm">
+                     <p><span class="inline-block w-3 h-3 bg-red-200 mr-2"></span> Chemin à parcourir</p>
+                     <p><span class="inline-block w-3 h-3 bg-red-600 mr-2"></span> Chemin parcouru</p>
+                     <p><span class="inline-block relative w-4 h-4 rounded-full bg-red-500 border-2 border-white ring-2 ring-red-300 mr-2"></span> <span class="font-bold">Arrêt (Produit / Caisse)</span></p>
+                </div>
+            </div>
+            <div>
+                <div class="canvas-container">
+                    <canvas id="planCanvas" class="drawing"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const FLASK_API_URL = 'http://127.0.0.1:5000';
+        const MAGASIN_ID = 'M001';
+        
+        let canvas, ctx;
+        let magasinData = null;
+        let echelleDessin = 1;
+        let inventaireComplet = {};
+        let shoppingList = [];
+
+        let cheminDetailleComplet = [];
+        let arretsDuParcours = [];
+        let etapeActuelle = 0;
+
+        // --- Fonctions de base ---
+        function construireInventaireComplet(emplacements) { const map = {}; for (const produit in emplacements) { const nodeId = emplacements[produit]; if (!map[nodeId]) { map[nodeId] = produit; } } return map; }
+        
+        async function chargerMagasinData() {
+            document.getElementById('statutCalcul').textContent = 'Chargement du plan...';
+            try {
+                const response = await fetch(`${FLASK_API_URL}/api/v1/magasin_data/${MAGASIN_ID}`);
+                if (!response.ok) throw new Error(`Échec: ${response.status}`);
+                magasinData = await response.json();
+                inventaireComplet = construireInventaireComplet(magasinData.emplacements_produits);
+                initialiserCanvas();
+                dessinerPlan();
+                document.getElementById('statutCalcul').textContent = 'Prêt à calculer.';
+                const searchInput = document.getElementById('productSearchInput');
+                searchInput.addEventListener('input', handleSearchInput);
+                searchInput.addEventListener('focus', () => updateSuggestions(searchInput.value));
+                searchInput.addEventListener('blur', () => { setTimeout(() => document.getElementById('searchResults').style.display = 'none', 150); });
+            } catch (error) {
+                document.getElementById('statutCalcul').textContent = `Erreur: ${error.message}`;
+            }
+        }
+
+        function initialiserCanvas() {
+            canvas = document.getElementById('planCanvas');
+            ctx = canvas.getContext('2d');
+            const TAILLE_BASE = 600; 
+            canvas.width = TAILLE_BASE;
+            canvas.height = TAILLE_BASE;
+            echelleDessin = TAILLE_BASE / 600; 
+        }
+
+        // --- LOGIQUE DE DESSIN ---
+        function dessinerPlan() {
+            if (!magasinData || !ctx) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const coords = magasinData.coordonnees_dessin;
+            const aretes = magasinData.arêtes_dessin;
+            const CAISSES_REGULIERES = ['C1', 'C2', 'C3'];
+            const CAISSE_AUTO = 'CA';
+
+            ctx.strokeStyle = '#e5e7eb'; ctx.lineWidth = 3;
+            aretes.forEach(arete => {
+                const startCoord = coords[arete.start]; const endCoord = coords[arete.end];
+                if (startCoord && endCoord) { ctx.beginPath(); ctx.moveTo(startCoord.x * echelleDessin, startCoord.y * echelleDessin); ctx.lineTo(endCoord.x * echelleDessin, endCoord.y * echelleDessin); ctx.stroke(); }
+            });
+
+            if (cheminDetailleComplet.length > 0) {
+                ctx.strokeStyle = '#fca5a5'; ctx.lineWidth = 7; ctx.lineCap = 'round';
+                ctx.beginPath();
+                for (let i = 0; i < cheminDetailleComplet.length - 1; i++) {
+                    const p1 = coords[cheminDetailleComplet[i]]; const p2 = coords[cheminDetailleComplet[i+1]];
+                    if (p1 && p2) { ctx.moveTo(p1.x * echelleDessin, p1.y * echelleDessin); ctx.lineTo(p2.x * echelleDessin, p2.y * echelleDessin); }
+                }
+                ctx.stroke();
+            }
+
+            if (etapeActuelle > 0 && arretsDuParcours.length > 0) {
+                const noeudArretActuel = arretsDuParcours[etapeActuelle];
+                const indexDansCheminComplet = cheminDetailleComplet.indexOf(noeudArretActuel);
+                ctx.strokeStyle = '#dc2626'; ctx.lineWidth = 7; ctx.beginPath();
+                for (let i = 0; i < indexDansCheminComplet; i++) {
+                    const p1 = coords[cheminDetailleComplet[i]]; const p2 = coords[cheminDetailleComplet[i+1]];
+                    if (p1 && p2) { ctx.moveTo(p1.x * echelleDessin, p1.y * echelleDessin); ctx.lineTo(p2.x * echelleDessin, p2.y * echelleDessin); }
+                }
+                ctx.stroke();
+            }
+
+            for (const nodeId in coords) {
+                const coord = coords[nodeId];
+                let couleur = '#3b82f6'; let rayon = 8; let texte = nodeId; 
+                if (nodeId === 'E') { couleur = '#4f46e5'; rayon = 10; texte = 'Entrée'; }
+                else if (CAISSES_REGULIERES.includes(nodeId)) { couleur = '#f59e0b'; rayon = 10; texte = `Caisse ${nodeId}`; }
+                else if (nodeId === CAISSE_AUTO) { couleur = '#8b5cf6'; rayon = 10; texte = 'Caisse Auto'; }
+                if (inventaireComplet[nodeId] && ![...CAISSES_REGULIERES, CAISSE_AUTO, 'E'].includes(nodeId)) { texte = inventaireComplet[nodeId]; couleur = '#7c7c7c'; rayon = 8; }
+                ctx.fillStyle = couleur; ctx.beginPath(); ctx.arc(coord.x * echelleDessin, coord.y * echelleDessin, rayon, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = '#1f2937'; ctx.font = '12px sans-serif'; ctx.fillText(texte, coord.x * echelleDessin + 12, coord.y * echelleDessin + 5);
+            }
+
+            arretsDuParcours.forEach(nodeId => {
+                const coord = coords[nodeId];
+                if (coord) {
+                    const x = coord.x * echelleDessin; const y = coord.y * echelleDessin;
+                    ctx.fillStyle = 'rgba(239, 68, 68, 0.25)'; ctx.beginPath(); ctx.arc(x, y, 18, 0, Math.PI * 2); ctx.fill();
+                    ctx.fillStyle = '#ef4444'; ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+                    ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+                }
+            });
+        }
+        
+        // --- LOGIQUE DE NAVIGATION PAS À PAS ---
+        function validerEtape() {
+            etapeActuelle++;
+            const nextStepButton = document.getElementById('nextStepButton');
+            if (etapeActuelle >= arretsDuParcours.length - 1) {
+                nextStepButton.textContent = "Parcours Terminé 🎉";
+                nextStepButton.disabled = true;
+                document.getElementById('optimizeButton').classList.remove('hidden');
+            } else {
+                 const prochainArretNode = arretsDuParcours[etapeActuelle + 1];
+                 const prochainArretNom = inventaireComplet[prochainArretNode] || `Caisse (${prochainArretNode})`;
+                 nextStepButton.textContent = `Aller à : ${prochainArretNom} ✔️`;
+            }
+            dessinerPlan();
+        }
+        
+        // --- GESTION DE LA LISTE DE COURSES ---
+        function updateSuggestions(searchTerm = '') { const searchResultsContainer = document.getElementById('searchResults'); searchResultsContainer.innerHTML = ''; searchResultsContainer.style.display = 'block'; if (!magasinData) return; const allProducts = Object.keys(magasinData.emplacements_produits); const lowerCaseSearchTerm = searchTerm.toLowerCase().trim(); const suggestions = allProducts.filter(p => !shoppingList.includes(p)).filter(p => p.toLowerCase().includes(lowerCaseSearchTerm)); if (suggestions.length === 0 && lowerCaseSearchTerm) { const noResultDiv = document.createElement('div'); noResultDiv.textContent = 'Aucun produit trouvé'; noResultDiv.className = 'p-2 text-gray-500 text-sm'; searchResultsContainer.appendChild(noResultDiv); } else { suggestions.forEach(p => { const suggestionDiv = document.createElement('div'); suggestionDiv.textContent = p; suggestionDiv.className = 'search-suggestion'; suggestionDiv.onmousedown = () => addProductToList(p); searchResultsContainer.appendChild(suggestionDiv); }); } }
+        function handleSearchInput(event) { updateSuggestions(event.target.value); }
+        function addProductToList(product) { if (!shoppingList.includes(product)) { shoppingList.push(product); renderShoppingList(); } document.getElementById('productSearchInput').value = ''; document.getElementById('searchResults').style.display = 'none'; }
+        function removeProductFromList(productToRemove) { shoppingList = shoppingList.filter(product => product !== productToRemove); renderShoppingList(); }
+        function renderShoppingList() { const container = document.getElementById('shoppingListContainer'); const button = document.getElementById('optimizeButton'); container.innerHTML = ''; if (shoppingList.length === 0) { container.innerHTML = '<p class="text-gray-500 text-sm">Votre liste est vide.</p>'; button.disabled = true; return; } button.disabled = false; shoppingList.forEach(product => { const tag = document.createElement('div'); tag.className = 'flex justify-between items-center bg-indigo-100 text-indigo-800 text-sm font-medium px-3 py-1 rounded-full'; const productName = document.createElement('span'); productName.textContent = product; const removeButton = document.createElement('button'); removeButton.textContent = '×'; removeButton.className = 'ml-2 font-bold text-lg hover:text-red-600'; removeButton.onclick = () => removeProductFromList(product); tag.appendChild(productName); tag.appendChild(removeButton); container.appendChild(tag); }); }
+        
+        async function lancerOptimisation() {
+            if (!magasinData) return;
+            etapeActuelle = 0;
+            arretsDuParcours = [];
+            cheminDetailleComplet = [];
+            document.getElementById('optimizeButton').classList.add('hidden');
+            document.getElementById('statutCalcul').textContent = 'Calcul en cours...';
+
+            const payload = { magasin_id: MAGASIN_ID, liste_produits: shoppingList };
+            try {
+                const response = await fetch(`${FLASK_API_URL}/api/v1/optimize_route`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+                const data = await response.json();
+                if (response.ok) {
+                    cheminDetailleComplet = data.parcours_optimise_noms;
+                    const nodesDeLaListe = new Set();
+                    shoppingList.forEach(produit => { const nodeId = magasinData.emplacements_produits[produit]; if (nodeId) nodesDeLaListe.add(nodeId); });
+                    
+                    arretsDuParcours = ['E'];
+                    cheminDetailleComplet.forEach(node => { if (nodesDeLaListe.has(node) && !arretsDuParcours.includes(node)) { arretsDuParcours.push(node); } });
+                    const caisseFinale = cheminDetailleComplet[cheminDetailleComplet.length - 1];
+                    if (!arretsDuParcours.includes(caisseFinale)) { arretsDuParcours.push(caisseFinale); }
+
+                    document.getElementById('distanceOptimale').textContent = `${data.distance_optimale} unités`;
+                    document.getElementById('cheminOptimise').textContent = data.parcours_optimise_noms.join(' → ');
+                    document.getElementById('statutCalcul').textContent = "Prêt à commencer le parcours.";
+                    
+                    const nextStepButton = document.getElementById('nextStepButton');
+                    nextStepButton.disabled = false;
+                    nextStepButton.classList.remove('hidden');
+                    const prochainArretNode = arretsDuParcours[1];
+                    const prochainArretNom = inventaireComplet[prochainArretNode] || `Caisse (${prochainArretNode})`;
+                    nextStepButton.textContent = `Aller à : ${prochainArretNom} ✔️`;
+                    
+                    dessinerPlan();
+                } else {
+                    document.getElementById('statutCalcul').textContent = `Erreur API: ${data.error || 'Erreur inconnue'}`;
+                    document.getElementById('optimizeButton').classList.remove('hidden');
+                }
+            } catch (error) {
+                document.getElementById('statutCalcul').textContent = `Erreur fatale: Échec de la connexion.`;
+                document.getElementById('optimizeButton').classList.remove('hidden');
+            }
+        }
+
+        window.onload = () => {
+            chargerMagasinData();
+            renderShoppingList();
+        };
+    </script>
+</body>
+</html>
