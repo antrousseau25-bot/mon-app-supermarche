@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template # render_template est ajouté
+from flask import Flask, request, jsonify, render_template, send_from_directory # render_template est ajouté
 from flask_cors import CORS
 import heapq
 import json
@@ -218,7 +218,9 @@ def optimize_route():
     if error_path: return jsonify(error_path), 500
     response = { "magasin_id": magasin_id, "liste_fournie": liste_courses, "distance_optimale": round(distance_reelle, 2), "parcours_optimise_noms": parcours_final_noms, "message": message }
     return jsonify(response)
-
+@app.route('/service-worker.js')
+def serve_sw():
+    return send_from_directory('.', 'service-worker.js')
 
 # --- LANCEMENT DE L'APPLICATION ---
 if __name__ == '__main__':
