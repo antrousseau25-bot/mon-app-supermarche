@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 import heapq
 import json
@@ -241,9 +241,10 @@ def optimize_route():
     response = { "magasin_id": magasin_id, "liste_fournie": liste_courses, "distance_optimale": round(distance_reelle, 2), "parcours_optimise_noms": parcours_final_noms, "message": message }
     return jsonify(response)
 
+# --- ROUTE PRINCIPALE POUR AFFICHER L'APPLICATION ---
 @app.route('/', methods=['GET'])
-def health_check():
-    return jsonify({"status": "OK", "service": "Route Optimization API"})
+def index_page():
+    return render_template('index2.html')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
