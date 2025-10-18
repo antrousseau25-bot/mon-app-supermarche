@@ -76,7 +76,7 @@
     </div>
 
     <script>
-        const FLASK_API_URL = ''; // Laisse ce champ vide
+        const FLASK_API_URL = '';
         const MAGASIN_ID = 'M001';
         
         let canvas, ctx;
@@ -230,9 +230,14 @@
                     const nextStepButton = document.getElementById('nextStepButton');
                     nextStepButton.disabled = false;
                     nextStepButton.classList.remove('hidden');
-                    const prochainArretNode = arretsDuParcours[1];
-                    const prochainArretNom = inventaireComplet[prochainArretNode] || `Caisse (${prochainArretNode})`;
-                    nextStepButton.textContent = `Aller à : ${prochainArretNom} ✔️`;
+                    if (arretsDuParcours.length > 1) {
+                        const prochainArretNode = arretsDuParcours[1];
+                        const prochainArretNom = inventaireComplet[prochainArretNode] || `Caisse (${prochainArretNode})`;
+                        nextStepButton.textContent = `Aller à : ${prochainArretNom} ✔️`;
+                    } else {
+                        nextStepButton.textContent = "Parcours Terminé 🎉";
+                        nextStepButton.disabled = true;
+                    }
                     
                     dessinerPlan();
                 } else {
@@ -248,27 +253,13 @@
         window.onload = () => {
             chargerMagasinData();
             renderShoppingList();
-        };
-    </script>
-    <script>
-        // ... (tout votre code d'application existant) ...
 
-        window.onload = () => {
-            chargerMagasinData();
-            renderShoppingList();
-
-            // Enregistrement du Service Worker
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.register('/service-worker.js')
-                .then(registration => {
-                    console.log('Service Worker enregistré avec succès:', registration);
-                })
-                .catch(error => {
-                    console.log('Échec de l\'enregistrement du Service Worker:', error);
-                });
+                .then(reg => console.log('Service worker enregistré.'))
+                .catch(err => console.log('Erreur Service worker:', err));
             }
         };
     </script>
-</body>
 </body>
 </html>
